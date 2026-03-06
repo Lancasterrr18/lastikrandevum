@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>LastikRandevum | İşletme Yönetimi</title>
+    <!-- Fonts & Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { DEFAULT: '#f97316', dark: '#ea580c', light: '#fff7ed' },
+                        surface: '#f8fafc',
+                        dark: '#0f172a',
+                        success: '#10b981',
+                        warning: '#f59e0b'
+                    },
+                    fontFamily: { sans: ['Plus Jakarta Sans', 'sans-serif'] },
+                    borderRadius: { '4xl': '2rem', '5xl': '2.5rem' }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color: transparent; scroll-behavior: smooth; }
+        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+        .slide-up { animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1); }
+        @keyframes slideUp { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        input, select, textarea { transition: all 0.2s ease; }
+        input:focus, select:focus, textarea:focus { border-color: #f97316 !important; box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.1); }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        
+        .search-container {
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .search-container:focus-within {
+            transform: translateY(-4px);
+            box-shadow: 0 25px 50px -12px rgba(249, 115, 22, 0.15);
+        }
+        .search-input::placeholder {
+            color: #94a3b8;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body class="bg-surface text-dark min-h-screen">
+
+    <div id="app"></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, addDoc, getDocs, updateDoc, deleteDoc, onSnapshot, serverTimestamp, query, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAge8-6d2u6Qq6bUIGDmYBQLGouz1t_TBs",
+            authDomain: "lastikrandevum-3925c.firebaseapp.com",
+            projectId: "lastikrandevum-3925c",
+            storageBucket: "lastikrandevum-3925c.firebasestorage.app",
+            messagingSenderId: "624981548541",
+            appId: "1:624981548541:web:5a23d62c894b767dcf0d94"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'lastik-pro-v9';
+
+        const ADMIN_EMAILS = ['admin@test.com', 'yusufefeozcelikyt@gmail.com'];
+
+        const state = {
+            view: 'explore', 
+            user: null,
+            shops: [],
+            services: [], 
+            shopServices: [], 
+            selectedShop: null,
+            myAppointments: [],
+            allAppointments: [],
+            loading: true,
+            authMode: 'login',
+            toast: { show: false, message: '', type: 'success' },
+            isSuperAdmin: false,
+            isShopOwner: false,
+            businessTab: 'appointments',
+            searchQuery: '' 
+        };
+
+        window.signOutUser = () => signOut(auth);
+
+        const init = async () => {
+            onAuthStateChanged(auth, (user) => {
+                state.user = user;
+                state.loading = false;
+                state.isSuperAdmin = user && user.email && ADMIN_EMAILS.includes(user.email.toLowerCase());
+                if (user) subscribeData();
+                render();
+            });
+            await fetchData();
+        };
+
+        const fetchData = async () => {
+            try {
+                const shopsCol = collection(db, 'artifacts', appId, 'public', 'data', 'shops');
+                const servCol = collection(db, 'artifacts', appId, 'public', 'data', 'services');
+                
+                const [sSnap, vSnap] = await Promise.all([getDocs(shopsCol), getDocs(servCol)]);
+                state.shops = sSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+                state.services = vSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+                render();
+            } catch (e) {
+                console.error("Fetch error:", e);
+            }
+        };
+
+        const subscribeData = () => {
+            if (!state.user) return;
+            onSnapshot(collection(db, 'artifacts', appId, 'users', state.user.uid, 'appointments'), (s) => {
+                state.myAppointments = s.docs.map(d => ({ id: d.id, ...d.data() }));
+                render();
+            });
+            
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'appointments'), (s) => {
+                state.allAppointments = s.docs.map(d => ({ id: d.id, ...d.data() }));
+                state.isShopOwner = state.user && state.user.email && state.shops.some(sh => sh.email && sh.email.trim().toLowerCase() === state.user.email.trim().toLowerCase());
+                
+                if (state.isShopOwner) {
+                    const myShop = state.shops.find(sh => sh.email && sh.email.trim().toLowerCase() === state.user.email.trim().toLowerCase());
+                    if (myShop) {
+                        onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', `services_${myShop.id}`), (sv) => {
+                            state.shopServices = sv.docs.map(d => ({ id: d.id, ...d.data() }));
+                            render();
+                        }, (err) => console.error("Service sync error:", err));
+                    }
+                }
+                render();
+            }, (err) => console.error("App sync error:", err));
+        };
+
+        window.navigate = (view, data = null) => { 
+            state.view = view; 
+            state.selectedShop = data; 
+            render(); 
+            window.scrollTo(0,0); 
+        };
+        
+        window.setBusinessTab = (tab) => { state.businessTab = tab; render(); };
+        window.setAuthMode = (mode) => { state.authMode = mode; render(); };
+        window.showToast = (msg, type = 'success') => { 
+            state.toast = { show: true, message: msg, type }; 
+            render(); 
+            setTimeout(() => { state.toast.show = false; render(); }, 3000); 
+        };
+
+        window.handleSearch = (e) => {
+            state.searchQuery = e.target.value.toLowerCase();
+            renderListOnly(); 
+        };
+
+        const renderListOnly = () => {
+            const listContainer = document.getElementById('shop-list-container');
+            if (listContainer) {
+                const filteredShops = state.shops.filter(shop => 
+                    shop.name.toLowerCase().includes(state.searchQuery) || 
+                    shop.city.toLowerCase().includes(state.searchQuery) ||
+                    shop.district.toLowerCase().includes(state.searchQuery)
+                );
+                listContainer.innerHTML = ShopCards(filteredShops);
+                lucide.createIcons();
+            }
+        };
+
+        window.toggleShopModal = (show) => {
+            const modal = document.getElementById('addShopModal');
+            if (!modal) return;
+            if (show) modal.classList.remove('hidden', 'opacity-0');
+            else modal.classList.add('hidden', 'opacity-0');
+        };
+
+        window.handleAuth = async (e) => {
+            e.preventDefault();
+            const { email, password } = Object.fromEntries(new FormData(e.target));
+            try {
+                if (state.authMode === 'login') {
+                    await signInWithEmailAndPassword(auth, email, password);
+                } else {
+                    await createUserWithEmailAndPassword(auth, email, password);
+                    window.showToast('Hoş geldiniz!');
+                }
+                navigate('explore');
+            } catch (err) { 
+                window.showToast('İşlem başarısız: ' + err.code, 'error'); 
+            }
+        };
+
+        window.addCustomService = async (e) => {
+            e.preventDefault();
+            const myShop = state.user?.email && state.shops.find(sh => sh.email && sh.email.trim().toLowerCase() === state.user.email.trim().toLowerCase());
+            if (!myShop && !state.isSuperAdmin) {
+                window.showToast('Hizmet eklemek için işletme sahibi olmalısınız.', 'error');
+                return;
+            }
+            const data = Object.fromEntries(new FormData(e.target));
+            const shopIdToUpdate = myShop ? myShop.id : 'global_services';
+            try {
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', `services_${shopIdToUpdate}`), {
+                    name: data.name,
+                    price: Number(data.price),
+                    category: data.category || 'Genel',
+                    description: data.description || '',
+                    ownerEmail: state.user.email.trim().toLowerCase(),
+                    createdAt: serverTimestamp()
+                });
+                window.showToast('Hizmet başarıyla eklendi');
+                e.target.reset();
+            } catch (err) { 
+                console.error("Hizmet ekleme hatası:", err);
+                window.showToast('Hizmet eklenirken bir hata oluştu.', 'error'); 
+            }
+        };
+
+        window.deleteCustomService = async (id, serviceName) => {
+            const confirmed = confirm(`"${serviceName}" hizmetini silmek istediğinize emin misiniz?`);
+            if (!confirmed) return;
+            const myShop = state.user?.email && state.shops.find(sh => sh.email && sh.email.toLowerCase() === state.user.email.toLowerCase());
+            const shopIdToUpdate = myShop ? myShop.id : 'global_services';
+            try {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', `services_${shopIdToUpdate}`, id));
+                window.showToast('Hizmet başarıyla silindi');
+            } catch (err) { 
+                window.showToast('Hizmet silinirken bir hata oluştu.', 'error'); 
+            }
+        };
+
+        window.addShop = async (e) => {
+            e.preventDefault();
+            const formData = Object.fromEntries(new FormData(e.target));
+            const shopData = {
+                name: formData.name, 
+                city: formData.city, 
+                district: formData.district,
+                email: formData.email.toLowerCase().trim(), 
+                phone: formData.phone,
+                address: formData.address, 
+                mapsUrl: formData.mapsUrl || '', 
+                rating: '5.0',
+                createdAt: serverTimestamp()
+            };
+            try {
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'shops'), shopData);
+                window.showToast('İşletme sisteme eklendi');
+                fetchData();
+                window.toggleShopModal(false);
+                e.target.reset();
+            } catch (e) {
+                window.showToast('Yetki hatası veya bağlantı sorunu', 'error');
+            }
+        };
+
+        window.updateStatus = async (id, userId, status) => {
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'appointments', id), { status });
+                if (userId) {
+                    await updateDoc(doc(db, 'artifacts', appId, 'users', userId, 'appointments', id), { status });
+                }
+                window.showToast('Durum güncellendi');
+            } catch (err) {
+                console.error("Status update error:", err);
+                window.showToast('Güncelleme sırasında bir hata oluştu.', 'error');
+            }
+        };
+
+        window.submitBooking = async (e) => {
+            e.preventDefault();
+            if (!state.user) return navigate('auth');
+            const data = Object.fromEntries(new FormData(e.target));
+            
+            // Pazar günü kontrolü
+            const selectedDate = new Date(data.date);
+            if (selectedDate.getDay() === 0) {
+                window.showToast('Pazar günü hizmet vermiyoruz.', 'error');
+                return;
+            }
+
+            let service = state.shopServices.find(s => s.id === data.serviceId);
+            if(!service) service = state.services.find(s => s.id === data.serviceId);
+            
+            const appObj = {
+                ...data,
+                userId: state.user.uid,
+                userEmail: state.user.email,
+                shopId: state.selectedShop.id,
+                shopName: state.selectedShop.name,
+                serviceName: service?.name || "Hizmet",
+                price: Number(service?.price || 0),
+                status: 'pending',
+                createdAt: serverTimestamp()
+            };
+            try {
+                const publicRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'appointments'), appObj);
+                await setDoc(doc(db, 'artifacts', appId, 'users', state.user.uid, 'appointments', publicRef.id), { ...appObj, id: publicRef.id });
+                window.showToast('Randevu talebi oluşturuldu.');
+                navigate('appointments');
+            } catch (err) {
+                window.showToast('Randevu oluşturulamadı.', 'error');
+            }
+        };
+
+        const generateTimeSlots = () => {
+            const slots = [];
+            for (let hour = 9; hour < 19; hour++) {
+                slots.push(`${hour.toString().padStart(2, '0')}:00`);
+                slots.push(`${hour.toString().padStart(2, '0')}:30`);
+            }
+            slots.push("19:00");
+            return slots;
+        };
+
+        const Nav = () => `
+            <nav class="fixed top-0 left-0 right-0 glass z-50 h-28 flex items-center justify-between px-6 md:px-12 border-b border-slate-100">
+                <div class="flex items-center gap-3 cursor-pointer" onclick="navigate('explore')">
+                    <!-- LOGO BOYUTU BÜYÜTÜLDÜ -->
+                    <img src="https://i.hizliresim.com/h5j0zaq.png" alt="Logo" class="h-24 md:h-32 w-auto object-contain transition-transform hover:scale-105">
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="navigate('explore')" class="p-4 ${state.view === 'explore' ? 'text-primary' : 'text-slate-400'}"><i data-lucide="search" class="w-6 h-6"></i></button>
+                    ${state.user ? `<button onclick="navigate('appointments')" class="p-4 ${state.view === 'appointments' ? 'text-primary' : 'text-slate-400'}"><i data-lucide="calendar" class="w-6 h-6"></i></button>` : ''}
+                    ${state.isSuperAdmin || state.isShopOwner ? `<button onclick="navigate('business')" class="bg-dark text-white px-6 py-3 rounded-2xl text-[10px] font-black tracking-widest uppercase ml-2">PANEL ${state.isSuperAdmin ? '(S.A)' : ''}</button>` : ''}
+                    ${state.user ? `<button onclick="signOutUser()" class="ml-4 text-slate-300 hover:text-red-500 transition-colors"><i data-lucide="log-out" class="w-6 h-6"></i></button>` : `<button onclick="navigate('auth')" class="bg-primary text-white px-8 py-3.5 rounded-2xl font-black text-xs ml-2 uppercase tracking-widest shadow-lg">GİRİŞ YAP</button>`}
+                </div>
+            </nav>
+        `;
+
+        const ShopCards = (filteredShops) => {
+            if (filteredShops.length === 0) {
+                return `<div class="col-span-full py-20 text-center font-bold text-slate-400">Sonuç bulunamadı.</div>`;
+            }
+            return filteredShops.map(shop => `
+                <div onclick="navigate('detail', ${JSON.stringify(shop).replace(/"/g, '&quot;')})" class="bg-white p-8 rounded-[60px] border border-slate-100 shadow-sm cursor-pointer hover:-translate-y-4 transition-all duration-500 group relative">
+                    <div class="h-48 bg-slate-50 rounded-[45px] mb-6 flex items-center justify-center border border-slate-50 group-hover:bg-primary/5 transition-colors">
+                        <i data-lucide="warehouse" class="w-16 h-16 text-slate-200 group-hover:text-primary/20 transition-all"></i>
+                    </div>
+                    <h3 class="text-2xl font-black mb-1 group-hover:text-primary tracking-tighter transition-colors">${shop.name}</h3>
+                    <div class="text-slate-400 text-sm font-bold truncate italic flex items-center gap-2">
+                        <i data-lucide="map-pin" class="w-3 h-3 text-slate-300"></i>
+                        ${shop.district}, ${shop.city}
+                    </div>
+                </div>
+            `).join('');
+        };
+
+        const Explore = () => {
+            const filteredShops = state.shops.filter(shop => 
+                shop.name.toLowerCase().includes(state.searchQuery) || 
+                shop.city.toLowerCase().includes(state.searchQuery) ||
+                shop.district.toLowerCase().includes(state.searchQuery)
+            );
+
+            return `
+                <div class="max-w-7xl mx-auto p-6 pt-14 slide-up">
+                    <div class="relative bg-dark rounded-[60px] p-16 mb-16 overflow-hidden text-white min-h-[400px] flex flex-col justify-center shadow-3xl">
+                        <div class="relative z-10">
+                            <h1 class="text-6xl font-black mb-6 leading-[0.9] tracking-tighter">Lastik İşleriniz Artık<br><span class="text-primary italic">Daha Hızlı.</span></h1>
+                            <p class="text-slate-400 text-lg mb-10 max-w-lg font-medium leading-relaxed italic">Randevunuzu saniyeler içinde alın, uzman ellerde aracınızı tazeleyin.</p>
+                            <button onclick="window.scrollTo({top: 600, behavior: 'smooth'})" class="bg-primary text-white px-10 py-5 rounded-3xl font-black text-[10px] tracking-widest uppercase">HEMEN SERVİS BUL</button>
+                        </div>
+                    </div>
+
+                    <div class="max-w-5xl mx-auto mb-20 -mt-10 relative z-20 px-4">
+                        <div class="search-container bg-white rounded-[40px] p-3 shadow-2xl flex items-center border border-slate-100">
+                            <div class="flex-1 relative group pl-4">
+                                <i data-lucide="search" class="absolute left-6 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300"></i>
+                                <input type="text" placeholder="İşletme adı, il veya ilçe yazın..." oninput="handleSearch(event)" value="${state.searchQuery}" class="w-full bg-transparent border-none p-5 pl-12 rounded-3xl outline-none font-bold text-lg">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="shop-list-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                        ${ShopCards(filteredShops)}
+                    </div>
+                </div>
+            `;
+        };
+
+        const Detail = () => {
+            const shop = state.selectedShop;
+            const shopSpecificServices = state.shopServices;
+            const timeSlots = generateTimeSlots();
+
+            return `
+                <div class="max-w-7xl mx-auto p-6 pt-14 slide-up">
+                    <button onclick="navigate('explore')" class="mb-10 flex items-center gap-3 text-slate-400 font-black text-[10px] tracking-widest uppercase"><i data-lucide="arrow-left" class="w-4 h-4"></i> GERİ DÖN</button>
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-12">
+                        <div class="lg:col-span-2 space-y-8">
+                            <div class="bg-white p-12 rounded-[60px] border border-slate-50 shadow-sm">
+                                <h1 class="text-5xl font-black mb-4 tracking-tighter">${shop.name}</h1>
+                                <p class="text-slate-400 font-bold italic">${shop.address}</p>
+                                ${shop.mapsUrl ? `<a href="${shop.mapsUrl}" target="_blank" class="inline-flex items-center gap-2 text-primary font-black text-[10px] tracking-widest uppercase mt-4 hover:text-primary-dark transition-colors"><i data-lucide="map" class="w-4 h-4"></i> HARİTADA GÖR</a>` : ''}
+                                
+                                <div class="flex items-center gap-8 pt-8 mt-10 border-t border-slate-50">
+                                    <div class="flex flex-col"><span class="text-[9px] font-black text-slate-300 uppercase">ŞEHİR</span><span class="font-black">${shop.city}</span></div>
+                                    <div class="flex flex-col"><span class="text-[9px] font-black text-slate-300 uppercase">İLÇE</span><span class="font-black">${shop.district}</span></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="bg-white p-10 rounded-[60px] border border-slate-100 shadow-2xl sticky top-32">
+                                <h3 class="text-2xl font-black mb-8 italic">Randevu Al</h3>
+                                <form onsubmit="submitBooking(event)" class="space-y-4">
+                                    <input type="text" name="plate" required placeholder="PLAKA" class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none font-black text-xl text-center uppercase">
+                                    <input type="tel" name="phone" required placeholder="TELEFON" class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none font-bold text-center">
+                                    <select name="serviceId" required class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none font-bold text-center appearance-none cursor-pointer">
+                                        <option value="" disabled selected>Hizmet Seçiniz</option>
+                                        ${shopSpecificServices.map(s => `<option value="${s.id}">${s.name} - ₺${s.price}</option>`).join('')}
+                                    </select>
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <input type="date" name="date" required class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none text-[10px] font-black uppercase">
+                                        <select name="time" required class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none font-black text-[10px] appearance-none cursor-pointer">
+                                            <option value="" disabled selected>SAAT</option>
+                                            ${timeSlots.map(t => `<option value="${t}">${t}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                    <button type="submit" class="w-full bg-primary text-white py-6 rounded-[35px] font-black text-[10px] tracking-widest uppercase shadow-xl mt-4">REZERVASYON YAP</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const Appointments = () => `
+            <div class="max-w-2xl mx-auto p-6 pt-14 slide-up">
+                <h1 class="text-4xl font-black mb-12 tracking-tighter italic">Randevularım</h1>
+                <div class="space-y-6">
+                    ${state.myAppointments.length === 0 ? `<div class="p-20 text-center text-slate-300 font-bold italic">Randevu bulunamadı.</div>` : state.myAppointments.sort((a,b) => b.createdAt - a.createdAt).map(app => `
+                        <div class="bg-white p-8 rounded-[45px] border border-slate-50 shadow-sm flex items-center justify-between">
+                            <div>
+                                <h4 class="font-black text-2xl tracking-tighter mb-1">${app.shopName}</h4>
+                                <div class="text-[10px] font-black text-primary uppercase">${app.serviceName} • ${app.date} ${app.time || ''}</div>
+                            </div>
+                            <span class="text-[9px] font-black uppercase px-6 py-3 rounded-2xl ${app.status === 'completed' ? 'bg-emerald-100 text-emerald-600' : app.status === 'confirmed' ? 'bg-emerald-50 text-emerald-500' : app.status === 'cancelled' ? 'bg-red-50 text-red-500' : 'bg-slate-100 text-slate-500'}">${app.status === 'completed' ? 'TAMAMLANDI' : app.status}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+
+        const BusinessDashboard = () => {
+            const myShop = state.user?.email && state.shops.find(s => s.email && s.email.trim().toLowerCase() === state.user.email.trim().toLowerCase());
+            const filteredAppointments = state.isSuperAdmin 
+                ? state.allAppointments 
+                : state.allAppointments.filter(a => a.shopId === myShop?.id);
+
+            const totalRevenue = filteredAppointments
+                .filter(a => a.status === 'confirmed' || a.status === 'completed')
+                .reduce((acc, curr) => acc + (Number(curr.price) || 0), 0);
+            
+            const pendingCount = filteredAppointments.filter(a => a.status === 'pending').length;
+            const completedCount = filteredAppointments.filter(a => a.status === 'completed').length;
+
+            const customersMap = {};
+            filteredAppointments.forEach(app => {
+                const key = app.userEmail || app.phone || 'bilinmeyen';
+                if (!customersMap[key]) {
+                    customersMap[key] = {
+                        email: app.userEmail || '',
+                        phone: app.phone || 'Belirtilmedi',
+                        plate: app.plate || '',
+                        totalAppointments: 0,
+                        totalSpent: 0,
+                        lastVisit: app.date || ''
+                    };
+                }
+                customersMap[key].totalAppointments += 1;
+                if(app.status === 'confirmed' || app.status === 'completed') {
+                    customersMap[key].totalSpent += Number(app.price) || 0;
+                }
+                
+                if (app.date && (!customersMap[key].lastVisit || new Date(app.date) > new Date(customersMap[key].lastVisit))) {
+                    customersMap[key].lastVisit = app.date;
+                }
+                if (app.plate && !customersMap[key].plate.includes(app.plate)) {
+                    customersMap[key].plate += (customersMap[key].plate ? ', ' : '') + app.plate;
+                }
+            });
+            const customersList = Object.values(customersMap).sort((a,b) => b.totalAppointments - a.totalAppointments);
+
+            return `
+                <div class="max-w-7xl mx-auto p-6 pt-14 slide-up">
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-12">
+                        <div>
+                            <h1 class="text-5xl font-black text-dark tracking-tighter">${state.isSuperAdmin ? 'Sistem Yönetimi' : 'İşletme Merkezi'}</h1>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            ${state.isSuperAdmin ? `<button onclick="toggleShopModal(true)" class="bg-primary text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase shadow-xl">İŞLETME EKLE</button>` : ''}
+                            <div class="flex bg-white p-1 rounded-[22px] border border-slate-100 shadow-sm overflow-x-auto">
+                                <button onclick="setBusinessTab('appointments')" class="px-6 py-2.5 rounded-[18px] text-[10px] font-black transition-all whitespace-nowrap ${state.businessTab === 'appointments' ? 'bg-dark text-white' : 'text-slate-400'}">RANDEVULAR</button>
+                                <button onclick="setBusinessTab('services')" class="px-6 py-2.5 rounded-[18px] text-[10px] font-black transition-all whitespace-nowrap ${state.businessTab === 'services' ? 'bg-dark text-white' : 'text-slate-400'}">HİZMETLER</button>
+                                <button onclick="setBusinessTab('customers')" class="px-6 py-2.5 rounded-[18px] text-[10px] font-black transition-all whitespace-nowrap ${state.businessTab === 'customers' ? 'bg-dark text-white' : 'text-slate-400'}">MÜŞTERİ TAKİP</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+                        <div class="bg-white p-8 rounded-[40px] border border-slate-50 shadow-sm">
+                            <div class="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">TOPLAM CİRO</div>
+                            <div class="text-4xl font-black text-emerald-500 tracking-tighter italic">₺${totalRevenue.toLocaleString()}</div>
+                        </div>
+                        <div class="bg-white p-8 rounded-[40px] border border-slate-50 shadow-sm">
+                            <div class="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">BEKLEYEN RANDEVU</div>
+                            <div class="text-4xl font-black text-warning tracking-tighter italic">${pendingCount}</div>
+                        </div>
+                        <div class="bg-white p-8 rounded-[40px] border border-slate-50 shadow-sm">
+                            <div class="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">TAMAMLANAN İŞLER</div>
+                            <div class="text-4xl font-black text-primary tracking-tighter italic">${completedCount}</div>
+                        </div>
+                    </div>
+
+                    ${state.businessTab === 'appointments' ? `
+                        <div class="space-y-4">
+                            ${filteredAppointments.length === 0 ? `<div class="p-20 text-center font-bold text-slate-400">Henüz randevu yok.</div>` : filteredAppointments.sort((a,b) => b.createdAt - a.createdAt).map(app => `
+                                <div class="bg-white p-8 rounded-[40px] border border-slate-50 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-primary/20 transition-colors">
+                                    <div class="flex items-center gap-6">
+                                        <div class="text-sm font-black text-dark bg-slate-100 p-4 rounded-2xl uppercase min-w-[100px] text-center">${app.plate}</div>
+                                        <div>
+                                            <div class="font-black text-lg">${app.serviceName}</div>
+                                            <div class="text-[10px] text-slate-400 font-bold uppercase italic">${app.date} ${app.time || ''} | ${app.userEmail}</div>
+                                        </div>
+                                    </div>
+                                    <div class="flex gap-2">
+                                        ${app.status === 'pending' ? `
+                                            <button onclick="updateStatus('${app.id}', '${app.userId}', 'confirmed')" class="bg-emerald-500 text-white px-6 py-3 rounded-2xl text-[10px] font-black hover:bg-emerald-600 transition-colors">ONAYLA</button>
+                                            <button onclick="updateStatus('${app.id}', '${app.userId}', 'cancelled')" class="bg-red-500 text-white px-6 py-3 rounded-2xl text-[10px] font-black hover:bg-red-600 transition-colors">REDDET</button>
+                                        ` : app.status === 'confirmed' ? `
+                                            <button onclick="updateStatus('${app.id}', '${app.userId}', 'completed')" class="bg-dark text-white px-6 py-3 rounded-2xl text-[10px] font-black hover:bg-black transition-colors">TAMAMLANDI</button>
+                                        ` : `<span class="px-6 py-3 rounded-2xl bg-slate-100 text-[10px] font-black uppercase text-slate-400">${app.status === 'completed' ? 'TAMAMLANDI' : app.status}</span>`}
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : state.businessTab === 'customers' ? `
+                        <div class="space-y-4">
+                            ${customersList.length === 0 ? `<div class="p-20 text-center font-bold text-slate-400">Henüz müşteri kaydı yok.</div>` : `
+                                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                    ${customersList.map(c => `
+                                        <div class="bg-white p-6 rounded-[35px] border border-slate-50 shadow-sm hover:border-primary/30 transition-colors">
+                                            <div class="flex items-center gap-4 mb-4">
+                                                <div class="w-12 h-12 rounded-full bg-primary/10 text-primary flex items-center justify-center font-black text-xl">
+                                                    ${c.email ? c.email[0].toUpperCase() : (c.phone ? c.phone[0] : '?')}
+                                                </div>
+                                                <div class="overflow-hidden">
+                                                    <div class="font-black text-lg truncate">${c.email || 'İsimsiz Müşteri'}</div>
+                                                    <div class="text-xs text-slate-400 font-bold">${c.phone}</div>
+                                                </div>
+                                            </div>
+                                            <div class="space-y-2 mt-4 pt-4 border-t border-slate-50">
+                                                <div class="flex justify-between text-sm"><span class="text-slate-400 font-bold">Araçlar:</span> <span class="font-black truncate max-w-[120px]" title="${c.plate}">${c.plate || '-'}</span></div>
+                                                <div class="flex justify-between text-sm"><span class="text-slate-400 font-bold">Toplam Randevu:</span> <span class="font-black">${c.totalAppointments}</span></div>
+                                                <div class="flex justify-between text-sm"><span class="text-slate-400 font-bold">Toplam Ciro:</span> <span class="font-black text-emerald-500">₺${c.totalSpent.toLocaleString()}</span></div>
+                                                <div class="flex justify-between text-sm"><span class="text-slate-400 font-bold">Son Ziyaret:</span> <span class="font-black">${c.lastVisit || '-'}</span></div>
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            `}
+                        </div>
+                    ` : `
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                             <div class="bg-white p-10 rounded-[50px] border border-slate-50 shadow-sm h-fit">
+                                <h3 class="text-xl font-black mb-8 italic">Yeni Hizmet Ekle</h3>
+                                <form onsubmit="addCustomService(event)" class="space-y-4">
+                                    <input type="text" name="name" required placeholder="Hizmet Adı" class="w-full bg-slate-50 border-none p-5 rounded-2xl outline-none font-bold focus:ring-2 focus:ring-primary/20">
+                                    <input type="number" name="price" required placeholder="Fiyat (₺)" class="w-full bg-slate-50 border-none p-5 rounded-2xl outline-none font-bold focus:ring-2 focus:ring-primary/20">
+                                    <button type="submit" class="w-full bg-dark text-white py-5 rounded-2xl font-black text-[10px] tracking-widest uppercase hover:bg-black transition-colors">YAYINLA</button>
+                                </form>
+                            </div>
+                            <div class="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                ${state.shopServices.length === 0 ? `<div class="col-span-full p-10 text-center font-bold text-slate-400 bg-white rounded-[35px] border border-slate-50">Henüz hizmet eklemediniz.</div>` : state.shopServices.map(sv => `
+                                    <div class="bg-white p-6 rounded-[35px] border border-slate-50 flex justify-between items-center group hover:border-primary/20 transition-all">
+                                        <div>
+                                            <div class="font-black text-lg">${sv.name}</div>
+                                            <div class="text-primary font-black italic">₺${sv.price}</div>
+                                        </div>
+                                        <button onclick="deleteCustomService('${sv.id}', '${sv.name}')" class="text-slate-300 hover:text-red-500 transition-colors p-3 bg-slate-50 rounded-full group-hover:bg-red-50"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `}
+                </div>
+
+                <div id="addShopModal" class="fixed inset-0 z-[100] bg-dark/60 backdrop-blur-sm flex items-center justify-center p-6 hidden opacity-0 transition-all duration-300">
+                    <div class="bg-white w-full max-w-xl rounded-[60px] p-12 relative slide-up shadow-3xl max-h-[90vh] overflow-y-auto">
+                        <button onclick="toggleShopModal(false)" class="absolute top-8 right-8 text-slate-300 hover:text-dark transition-colors"><i data-lucide="x"></i></button>
+                        <h2 class="text-3xl font-black mb-8 italic tracking-tighter">Yeni İşletme Kaydı</h2>
+                        <form onsubmit="addShop(event)" class="space-y-4">
+                            <input type="text" name="name" required placeholder="İŞLETME ADI" class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none font-bold">
+                            <div class="grid grid-cols-2 gap-4">
+                                <input type="text" name="city" required placeholder="ŞEHİR" class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none font-bold">
+                                <input type="text" name="district" required placeholder="İLÇE" class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none font-bold">
+                            </div>
+                            <input type="email" name="email" required placeholder="İŞLETME YÖNETİCİ E-POSTA" class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none font-bold">
+                            <input type="tel" name="phone" required placeholder="TELEFON" class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none font-bold">
+                            <textarea name="address" required placeholder="TAM ADRES" class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none font-bold h-24"></textarea>
+                            <input type="url" name="mapsUrl" placeholder="GOOGLE MAPS LİNKİ (Opsiyonel)" class="w-full bg-slate-50 border-none p-5 rounded-3xl outline-none font-bold">
+                            <button class="w-full bg-primary text-white py-6 rounded-[35px] font-black text-[11px] tracking-widest uppercase shadow-2xl mt-4">KAYDI TAMAMLA</button>
+                        </form>
+                    </div>
+                </div>
+            `;
+        };
+
+        const Auth = () => `
+            <div class="min-h-[85vh] flex items-center justify-center p-6">
+                <div class="bg-white p-16 rounded-[80px] shadow-3xl w-full max-w-lg border border-slate-50 slide-up text-center">
+                    <h2 class="text-4xl font-black mb-10 tracking-tighter italic">${state.authMode === 'login' ? 'Giriş Yap' : 'Kayıt Ol'}</h2>
+                    <form onsubmit="handleAuth(event)" class="space-y-6">
+                        <input type="email" name="email" required placeholder="E-posta" class="w-full bg-slate-50 border-none p-6 rounded-[30px] outline-none font-bold">
+                        <input type="password" name="password" required placeholder="Şifre" class="w-full bg-slate-50 border-none p-6 rounded-[30px] outline-none font-bold">
+                        <button class="w-full bg-dark text-white font-black py-6 rounded-[35px] shadow-2xl uppercase tracking-widest text-[10px]">DEVAM ET</button>
+                    </form>
+                    <button onclick="setAuthMode('${state.authMode === 'login' ? 'register' : 'login'}')" class="mt-8 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:text-primary underline">
+                        ${state.authMode === 'login' ? 'Yeni Hesap Oluştur' : 'Zaten Hesabım Var'}
+                    </button>
+                </div>
+            </div>
+        `;
+
+        const render = () => {
+            const root = document.getElementById('app');
+            if (state.loading) {
+                root.innerHTML = `<div class="flex items-center justify-center min-h-screen"><div class="animate-spin w-12 h-12 border-4 border-primary border-t-transparent rounded-full"></div></div>`;
+                return;
+            }
+            let viewHtml = '';
+            switch(state.view) {
+                case 'explore': viewHtml = Explore(); break;
+                case 'detail': viewHtml = Detail(); break;
+                case 'appointments': viewHtml = Appointments(); break;
+                case 'business': viewHtml = BusinessDashboard(); break;
+                case 'auth': viewHtml = Auth(); break;
+            }
+            root.innerHTML = `${Nav()}<main class="min-h-screen pt-32 pb-20">${viewHtml}</main>${state.toast.show ? `<div class="fixed bottom-10 left-1/2 -translate-x-1/2 z-[200] bg-dark text-white px-10 py-5 rounded-[30px] shadow-3xl font-black text-[10px] uppercase tracking-widest">${state.toast.message}</div>` : ''}`;
+            lucide.createIcons();
+        };
+
+        init();
+    </script>
+</body>
+</html>
